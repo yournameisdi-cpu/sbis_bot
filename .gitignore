@@ -1,9 +1,0 @@
-__pycache__/
-*.py[cod]
-env/
-venv/
-.env
-logs/
-downloads/
-*.log
-.DS_Store
