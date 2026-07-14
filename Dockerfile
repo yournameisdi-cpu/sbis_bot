@@ -1,26 +1,19 @@
-FROM python:3.11-slim
+FROM selenium/standalone-chrome:latest
 
-# Устанавливаем Firefox
-RUN apt-get update && apt-get install -y \
-    firefox-esr \
-    wget \
-    unzip \
+USER root
+
+# Устанавливаем Python
+RUN apt-get update && apt-get install -y python3 python3-pip \
     && rm -rf /var/lib/apt/lists/*
-
-# Устанавливаем GeckoDriver
-RUN wget -q "https://github.com/mozilla/geckodriver/releases/download/v0.34.0/geckodriver-v0.34.0-linux64.tar.gz" \
-    && tar -xzf geckodriver-v0.34.0-linux64.tar.gz \
-    && mv geckodriver /usr/local/bin/ \
-    && chmod +x /usr/local/bin/geckodriver \
-    && rm geckodriver-v0.34.0-linux64.tar.gz
 
 # Устанавливаем Python зависимости
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Копируем код
 COPY app.py .
 
-# Запускаем
-CMD ["python", "app.py"]
+USER seluser
+
+CMD ["python3", "app.py"]

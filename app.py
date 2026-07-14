@@ -10,8 +10,8 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.firefox.service import Service
-from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.keys import Keys
 import logging
 import urllib3
@@ -20,7 +20,6 @@ import traceback
 import random
 from flask import Flask, jsonify
 import threading
-import subprocess
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 load_dotenv()
@@ -116,6 +115,47 @@ def check_target(avg_check):
 
 def get_motivational_phrase():
     return random.choice(MOTIVATIONAL_PHRASES)
+
+def get_chrome_driver():
+    options = Options()
+    
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    
+    # Дополнительные опции для стабильности
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-plugins")
+    options.add_argument("--disable-images")
+    options.add_argument("--disable-javascript")
+    options.add_argument("--log-level=3")
+    options.add_argument("--silent")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--ignore-ssl-errors=yes")
+    options.add_argument("--ignore-certificate-errors")
+    
+    prefs = {
+        "download.default_directory": DOWNLOAD_DIR,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "plugins.always_open_pdf_externally": True,
+        "safebrowsing.enabled": True
+    }
+    options.add_experimental_option("prefs", prefs)
+    
+    service = Service("/usr/bin/chromedriver")
+    
+    try:
+        driver = webdriver.Chrome(service=service, options=options)
+        driver.set_page_load_timeout(60)
+        driver.implicitly_wait(15)
+        return driver
+    except Exception as e:
+        logger.error(f"Ошибка создания драйвера: {e}")
+        raise
 
 # ===================================================
 #  ПОЧТА
@@ -329,36 +369,7 @@ def format_report_for_telegram(employees, date_str):
     return "\n".join(lines)
 
 # ===================================================
-#  FIREFOX ДРАЙВЕР
-# ===================================================
-
-def get_firefox_driver():
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--window-size=1920,1080")
-    
-    # Настройки для Firefox
-    options.set_preference("browser.download.folderList", 2)
-    options.set_preference("browser.download.manager.showWhenStarting", False)
-    options.set_preference("browser.download.dir", DOWNLOAD_DIR)
-    options.set_preference("browser.helperApps.neverAsk.saveToDisk", "application/pdf,text/plain,text/csv")
-    options.set_preference("pdfjs.disabled", True)
-    options.set_preference("browser.download.useDownloadDir", True)
-    
-    service = Service("/usr/local/bin/geckodriver")
-    
-    try:
-        driver = webdriver.Firefox(service=service, options=options)
-        driver.set_page_load_timeout(60)
-        driver.implicitly_wait(15)
-        return driver
-    except Exception as e:
-        logger.error(f"Ошибка создания драйвера: {e}")
-        raise
-
-# ===================================================
-#  ОСНОВНАЯ ФУНКЦИЯ (Firefox)
+#  ОСНОВНАЯ ФУНКЦИЯ
 # ===================================================
 
 def download_report_from_link(download_link):
@@ -366,9 +377,7 @@ def download_report_from_link(download_link):
 
     driver = None
     try:
-        driver = get_firefox_driver()
-
-        logger.info("Открываем сайт СБИС...")
+        driver = get_chrome_driver()
         driver.get("https://online.sbis.ru/")
         time.sleep(10)
 
