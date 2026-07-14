@@ -127,13 +127,44 @@ def get_motivational_phrase():
 def get_chrome_driver():
     options = Options()
     
+    # Базовые аргументы для headless режима
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-blink-features=AutomationControlled")
     
+    # Новые аргументы для улучшения загрузки и стабильности
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-plugins")
+    options.add_argument("--disable-images")
+    options.add_argument("--disable-javascript")  # Отключаем JS для скорости (если не нужен)
+    options.add_argument("--disable-web-security")
+    options.add_argument("--disable-features=VizDisplayCompositor")
+    options.add_argument("--disable-background-timer-throttling")
+    options.add_argument("--disable-backgrounding-occluded-windows")
+    options.add_argument("--disable-renderer-backgrounding")
+    options.add_argument("--disable-ipc-flooding-protection")
+    options.add_argument("--disable-prompt-on-repost")
+    options.add_argument("--disable-hang-monitor")
+    options.add_argument("--disable-client-side-phishing-detection")
+    options.add_argument("--disable-crash-reporter")
+    options.add_argument("--disable-logging")
+    options.add_argument("--log-level=3")  # Минимум логов
+    options.add_argument("--silent")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--ignore-ssl-errors=yes")
+    options.add_argument("--ignore-certificate-errors")
+    options.add_argument("--disable-browser-side-navigation")
+    options.add_argument("--disable-features=IsolateOrigins,site-per-process")
+    options.add_argument("--disable-site-isolation-trials")
+    options.add_argument("--disable-accelerated-2d-canvas")
+    options.add_argument("--disable-accelerated-jpeg-decoding")
+    options.add_argument("--disable-accelerated-mjpeg-decode")
+    options.add_argument("--disable-accelerated-video-decode")
+    
+    # Настройки загрузки
     prefs = {
         "download.default_directory": DOWNLOAD_DIR,
         "download.prompt_for_download": False,
@@ -143,7 +174,7 @@ def get_chrome_driver():
     }
     options.add_experimental_option("prefs", prefs)
     
-    # Ищем ChromeDriver в системе
+    # Ищем ChromeDriver
     driver_paths = [
         "/usr/local/bin/chromedriver",
         "/usr/bin/chromedriver"
@@ -171,8 +202,9 @@ def get_chrome_driver():
     service = Service(driver_path)
     
     try:
+        # Увеличиваем таймауты
         driver = webdriver.Chrome(service=service, options=options)
-        driver.set_page_load_timeout(60)
+        driver.set_page_load_timeout(120)  # Увеличен до 120 секунд
         driver.implicitly_wait(10)
         return driver
     except Exception as e:
@@ -433,33 +465,46 @@ def download_report_from_link(download_link):
     logger.info("🚀 Загружаем страницу...")
     
     driver = None
-    try:
-        driver = get_chrome_driver()
-        driver.get("https://online.sbis.ru/")
-        time.sleep(3)
-        
-        login_to_sbis(driver)
-        
-        driver.get(download_link)
-        time.sleep(8)
-        
-        employees = parse_report_from_page(driver)
-        
-        if employees:
-            date_str = get_date_strings()['display']
-            message = format_report_for_telegram(employees, date_str)
-            return {"message": message, "employees": employees, "count": len(employees)}
-        else:
-            return None
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            driver = get_chrome_driver()
+            logger.info(f"Попытка {attempt + 1}: открываем сайт СБИС...")
+            driver.get("https://online.sbis.ru/")
+            time.sleep(5)  # Ждем начальную загрузку
             
-    except Exception as e:
-        logger.error(f"Ошибка: {e}")
-        raise
-        
-    finally:
-        if driver:
-            driver.quit()
-            logger.info("Браузер закрыт")
+            login_to_sbis(driver)
+            
+            logger.info(f"Переходим по ссылке отчета...")
+            driver.get(download_link)
+            time.sleep(10)  # Ждем загрузку отчета
+            
+            employees = parse_report_from_page(driver)
+            
+            if employees:
+                date_str = get_date_strings()['display']
+                message = format_report_for_telegram(employees, date_str)
+                return {"message": message, "employees": employees, "count": len(employees)}
+            else:
+                logger.warning("Сотрудники не найдены, но попытка завершена.")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Ошибка в попытке {attempt + 1}: {e}")
+            if driver:
+                driver.quit()
+                driver = None
+            if attempt < max_retries - 1:
+                logger.info("Повторная попытка через 10 секунд...")
+                time.sleep(10)
+            else:
+                logger.error("Все попытки исчерпаны.")
+                raise
+        finally:
+            if driver:
+                driver.quit()
+                logger.info("Браузер закрыт")
+    return None
 
 def send_text_to_telegram(text):
     if not SEND_TO_TELEGRAM:
