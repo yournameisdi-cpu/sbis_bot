@@ -13,6 +13,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.keys import Keys
+from webdriver_manager.chrome import ChromeDriverManager
 import logging
 import urllib3
 from dotenv import load_dotenv
@@ -43,7 +44,7 @@ MAIL_CONFIG = {
 
 STORE_NAME = os.getenv('STORE_NAME', "Zibo Food")
 
-# Используем /tmp для загрузок и логов (доступно для записи)
+# Используем /tmp для загрузок и логов
 DOWNLOAD_DIR = "/tmp/downloads"
 LOG_DIR = "/tmp/logs"
 
@@ -76,11 +77,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ===================================================
-#  ФУНКЦИИ
+#  ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ===================================================
 
 def setup_download_dir():
-    """Создает папки для загрузок и логов"""
     for directory in [DOWNLOAD_DIR, LOG_DIR]:
         try:
             os.makedirs(directory, exist_ok=True)
@@ -89,9 +89,9 @@ def setup_download_dir():
         except Exception as e:
             logger.warning(f"⚠️ Не удалось создать папку {directory}: {e}")
 
-def get_date_strings():
+def get_yesterday_date():
     yesterday = datetime.now() - timedelta(days=1)
-    return {'display': yesterday.strftime("%d.%m.%Y")}
+    return yesterday.strftime("%d.%m.%Y"), yesterday.strftime("%Y-%m-%d")
 
 def extract_number(text):
     if not text:
@@ -124,178 +124,97 @@ def check_target(avg_check):
 def get_motivational_phrase():
     return random.choice(MOTIVATIONAL_PHRASES)
 
-def get_chrome_driver():
-    options = Options()
-    
-    # Базовые аргументы для headless режима
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    
-    # Новые аргументы для улучшения загрузки и стабильности
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-plugins")
-    options.add_argument("--disable-images")
-    options.add_argument("--disable-javascript")  # Отключаем JS для скорости (если не нужен)
-    options.add_argument("--disable-web-security")
-    options.add_argument("--disable-features=VizDisplayCompositor")
-    options.add_argument("--disable-background-timer-throttling")
-    options.add_argument("--disable-backgrounding-occluded-windows")
-    options.add_argument("--disable-renderer-backgrounding")
-    options.add_argument("--disable-ipc-flooding-protection")
-    options.add_argument("--disable-prompt-on-repost")
-    options.add_argument("--disable-hang-monitor")
-    options.add_argument("--disable-client-side-phishing-detection")
-    options.add_argument("--disable-crash-reporter")
-    options.add_argument("--disable-logging")
-    options.add_argument("--log-level=3")  # Минимум логов
-    options.add_argument("--silent")
-    options.add_argument("--disable-notifications")
-    options.add_argument("--ignore-ssl-errors=yes")
-    options.add_argument("--ignore-certificate-errors")
-    options.add_argument("--disable-browser-side-navigation")
-    options.add_argument("--disable-features=IsolateOrigins,site-per-process")
-    options.add_argument("--disable-site-isolation-trials")
-    options.add_argument("--disable-accelerated-2d-canvas")
-    options.add_argument("--disable-accelerated-jpeg-decoding")
-    options.add_argument("--disable-accelerated-mjpeg-decode")
-    options.add_argument("--disable-accelerated-video-decode")
-    
-    # Настройки загрузки
-    prefs = {
-        "download.default_directory": DOWNLOAD_DIR,
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "plugins.always_open_pdf_externally": True,
-        "safebrowsing.enabled": True
-    }
-    options.add_experimental_option("prefs", prefs)
-    
-    # Ищем ChromeDriver
-    driver_paths = [
-        "/usr/local/bin/chromedriver",
-        "/usr/bin/chromedriver"
-    ]
-    
-    driver_path = None
-    for path in driver_paths:
-        if os.path.exists(path):
-            driver_path = path
-            logger.info(f"✅ Найден ChromeDriver: {path}")
-            break
-    
-    if not driver_path:
-        try:
-            result = subprocess.run(["which", "chromedriver"], capture_output=True, text=True)
-            if result.returncode == 0 and result.stdout.strip():
-                driver_path = result.stdout.strip()
-                logger.info(f"✅ ChromeDriver найден через which: {driver_path}")
-        except:
-            pass
-    
-    if not driver_path:
-        raise Exception("ChromeDriver не найден в системе")
-    
-    service = Service(driver_path)
-    
-    try:
-        # Увеличиваем таймауты
-        driver = webdriver.Chrome(service=service, options=options)
-        driver.set_page_load_timeout(120)  # Увеличен до 120 секунд
-        driver.implicitly_wait(10)
-        return driver
-    except Exception as e:
-        logger.error(f"Ошибка создания драйвера: {e}")
-        raise
-
 # ===================================================
-#  ПОЧТА
+#  ПОЧТА (ВАША РАБОЧАЯ ФУНКЦИЯ)
 # ===================================================
 
 def get_sbis_download_link():
-    logger.info("🔍 Подключаемся к почте...")
-    mail = None
-    
+    """Находит письмо с отчётом и извлекает ссылку."""
     try:
+        logger.info("Подключаемся к почте...")
         mail = imaplib.IMAP4_SSL(MAIL_CONFIG['imap_server'])
         mail.login(MAIL_CONFIG['email'], MAIL_CONFIG['password'])
-        
-        try:
-            mail.select('Saby')
-        except:
-            logger.warning("Папка Saby не найдена, используем INBOX")
-            mail.select('INBOX')
-        
-        date = (datetime.now() - timedelta(days=1)).strftime("%d-%b-%Y")
-        status, messages = mail.search(None, f'(FROM "saby.ru" SINCE "{date}")')
-        
-        if status != 'OK' or not messages[0]:
-            logger.info("Новых писем от СБИС не найдено")
+        mail.select('INBOX')
+
+        status, messages = mail.search(None, 'FROM "saby.ru"')
+        if status != 'OK':
+            logger.info("Писем от СБИС не найдено.")
             return None
-        
-        msg_ids = messages[0].split()
-        logger.info(f"Найдено {len(msg_ids)} писем от СБИС")
-        
-        for msg_id in reversed(msg_ids):
+
+        for msg_id in messages[0].split():
             status, msg_data = mail.fetch(msg_id, '(RFC822)')
             if status != 'OK':
                 continue
-            
+
             msg = email.message_from_bytes(msg_data[0][1])
             subject = decode_header(msg['Subject'])[0][0]
             if isinstance(subject, bytes):
-                subject = subject.decode('utf-8', errors='ignore')
-            
-            logger.info(f"📧 Проверяем письмо: {subject[:50]}...")
-            
-            if not re.search(r'выручк|отчет|отчёт|report', subject, re.IGNORECASE):
+                subject = subject.decode('utf-8')
+            logger.info(f"Найдено письмо: {subject}")
+
+            if "ВЫРУЧКА" not in subject:
                 continue
-            
+
+            body_text = ''
             body_html = ''
             if msg.is_multipart():
                 for part in msg.walk():
-                    if part.get_content_type() == 'text/html':
-                        try:
-                            payload = part.get_payload(decode=True)
-                            if payload:
-                                body_html = payload.decode('utf-8', errors='ignore')
-                                break
-                        except:
-                            pass
-            
+                    content_type = part.get_content_type()
+                    try:
+                        payload = part.get_payload(decode=True)
+                        if not payload:
+                            continue
+                        decoded = payload.decode('utf-8', errors='ignore')
+                        if content_type == 'text/plain':
+                            body_text += decoded
+                        elif content_type == 'text/html':
+                            body_html += decoded
+                    except:
+                        pass
+            else:
+                try:
+                    payload = msg.get_payload(decode=True)
+                    if payload:
+                        body_text = payload.decode('utf-8', errors='ignore')
+                except:
+                    pass
+
             html_links = re.findall(r'<a[^>]+href="([^"]+)"[^>]*>', body_html, re.IGNORECASE)
             for link in html_links:
                 if 'disk.sbis.ru' in link or 'online.sbis.ru/disk' in link:
                     if link.startswith('/'):
                         link = 'https://online.sbis.ru' + link
-                    logger.info(f"✅ Найдена ссылка: {link}")
+                    logger.info(f"Найдена ссылка в HTML: {link}")
+                    mail.store(msg_id, '+FLAGS', '\\Seen')
                     mail.close()
                     mail.logout()
                     return link
-        
+
+            text_links = re.findall(r'https?://[^\s<>"]+', body_text)
+            for link in text_links:
+                if 'disk.sbis.ru' in link or 'online.sbis.ru/disk' in link:
+                    logger.info(f"Найдена ссылка в тексте: {link}")
+                    mail.store(msg_id, '+FLAGS', '\\Seen')
+                    mail.close()
+                    mail.logout()
+                    return link
+
+            logger.warning("Ссылка на отчёт в письме не найдена")
+
         mail.close()
         mail.logout()
         return None
-        
     except Exception as e:
         logger.error(f"Ошибка при проверке почты: {e}")
-        if mail:
-            try:
-                mail.close()
-                mail.logout()
-            except:
-                pass
         return None
 
 # ===================================================
-#  ПАРСИНГ
+#  ПАРСИНГ ДАННЫХ
 # ===================================================
 
 def parse_report_from_page(driver):
-    logger.info("🔍 Парсим данные...")
+    """Парсит данные по сотрудникам со страницы отчёта."""
+    logger.info("🔍 Парсим данные со страницы...")
     employees = []
     
     try:
@@ -419,92 +338,167 @@ def format_report_for_telegram(employees, date_str):
     return "\n".join(lines)
 
 # ===================================================
-#  ВХОД В СБИС
-# ===================================================
-
-def login_to_sbis(driver):
-    logger.info("🔐 Выполняем вход в СБИС...")
-    
-    try:
-        if "login" in driver.current_url or "auth" in driver.current_url:
-            logger.info("Выполняем вход...")
-            
-            login_input = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.ID, "login"))
-            )
-            login_input.clear()
-            login_input.send_keys(SBIS_LOGIN)
-            login_input.send_keys(Keys.RETURN)
-            time.sleep(3)
-            
-            password_input = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.ID, "password"))
-            )
-            password_input.clear()
-            password_input.send_keys(SBIS_PASSWORD)
-            time.sleep(1)
-            
-            try:
-                submit_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
-                submit_button.click()
-            except:
-                password_input.send_keys(Keys.RETURN)
-            
-            time.sleep(5)
-            logger.info("✅ Вход выполнен")
-            
-    except Exception as e:
-        logger.warning(f"Ошибка при авторизации: {e}")
-        time.sleep(20)
-
-# ===================================================
-#  ОСНОВНАЯ ФУНКЦИЯ
+#  ОСНОВНАЯ ФУНКЦИЯ С ВХОДОМ (ВАШ РАБОЧИЙ КОД)
 # ===================================================
 
 def download_report_from_link(download_link):
-    logger.info("🚀 Загружаем страницу...")
-    
+    """Открывает страницу с отчётом и парсит данные."""
+    logger.info("🚀 Открываем страницу с отчётом...")
+
+    options = webdriver.ChromeOptions()
+    prefs = {
+        "download.default_directory": DOWNLOAD_DIR,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "plugins.always_open_pdf_externally": True,
+        "safebrowsing.enabled": True
+    }
+    options.add_experimental_option("prefs", prefs)
+    options.add_argument("--disable-notifications")
+    options.add_argument("--ignore-ssl-errors=yes")
+    options.add_argument("--ignore-certificate-errors")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--headless=new")
+
     driver = None
-    max_retries = 2
-    for attempt in range(max_retries):
+    try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=options)
+        driver.implicitly_wait(15)
+
+        logger.info("Открываем сайт СБИС...")
+        driver.get("https://online.sbis.ru/")
+        time.sleep(3)
+
+        # ---------- ДВУХЭТАПНАЯ АВТОРИЗАЦИЯ ----------
         try:
-            driver = get_chrome_driver()
-            logger.info(f"Попытка {attempt + 1}: открываем сайт СБИС...")
-            driver.get("https://online.sbis.ru/")
-            time.sleep(5)  # Ждем начальную загрузку
-            
-            login_to_sbis(driver)
-            
-            logger.info(f"Переходим по ссылке отчета...")
-            driver.get(download_link)
-            time.sleep(10)  # Ждем загрузку отчета
-            
-            employees = parse_report_from_page(driver)
-            
-            if employees:
-                date_str = get_date_strings()['display']
-                message = format_report_for_telegram(employees, date_str)
-                return {"message": message, "employees": employees, "count": len(employees)}
+            if "login" in driver.current_url or "auth" in driver.current_url:
+                logger.info("Выполняем вход...")
+                
+                # ШАГ 1: Вводим логин и нажимаем Enter
+                login_input = None
+                try:
+                    login_input = WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.ID, "login"))
+                    )
+                except:
+                    try:
+                        login_input = driver.find_element(By.NAME, "login")
+                    except:
+                        try:
+                            login_input = driver.find_element(By.CSS_SELECTOR, "input[type='text']")
+                        except:
+                            try:
+                                login_input = driver.find_element(By.XPATH, "//input[@placeholder='Логин' or @placeholder='Телефон' or @placeholder='Email']")
+                            except:
+                                pass
+                
+                if login_input:
+                    login_input.clear()
+                    login_input.send_keys(SBIS_LOGIN)
+                    logger.info("✅ Введен логин")
+                    time.sleep(1)
+                    
+                    # Нажимаем Enter, чтобы появилось поле пароля
+                    login_input.send_keys(Keys.RETURN)
+                    logger.info("🔄 Нажат Enter для отображения поля пароля")
+                    time.sleep(3)
+                    
+                    # ШАГ 2: Вводим пароль
+                    password_input = None
+                    try:
+                        password_input = WebDriverWait(driver, 10).until(
+                            EC.presence_of_element_located((By.ID, "password"))
+                        )
+                    except:
+                        try:
+                            password_input = driver.find_element(By.NAME, "password")
+                        except:
+                            try:
+                                password_input = driver.find_element(By.CSS_SELECTOR, "input[type='password']")
+                            except:
+                                pass
+                    
+                    if password_input:
+                        password_input.clear()
+                        password_input.send_keys(SBIS_PASSWORD)
+                        logger.info("✅ Введен пароль")
+                        time.sleep(1)
+                        
+                        # ШАГ 3: Нажимаем Enter или кнопку "Войти"
+                        try:
+                            submit_button = None
+                            try:
+                                submit_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+                            except:
+                                try:
+                                    submit_button = driver.find_element(By.XPATH, "//button[contains(text(), 'Войти')]")
+                                except:
+                                    try:
+                                        submit_button = driver.find_element(By.XPATH, "//button[contains(text(), 'Вход')]")
+                                    except:
+                                        pass
+                            
+                            if submit_button:
+                                submit_button.click()
+                                logger.info("✅ Нажата кнопка 'Войти'")
+                            else:
+                                password_input.send_keys(Keys.RETURN)
+                                logger.info("🔄 Нажат Enter для входа")
+                            
+                            time.sleep(5)
+                        except Exception as e:
+                            logger.warning(f"Ошибка при нажатии кнопки входа: {e}")
+                            password_input.send_keys(Keys.RETURN)
+                            time.sleep(5)
+                    else:
+                        logger.warning("Поле пароля не появилось, возможно, вход уже выполнен")
+                else:
+                    logger.warning("Поле логина не найдено, возможно, уже авторизованы")
             else:
-                logger.warning("Сотрудники не найдены, но попытка завершена.")
-                return None
+                logger.info("Уже авторизованы, вход не требуется")
                 
         except Exception as e:
-            logger.error(f"Ошибка в попытке {attempt + 1}: {e}")
+            logger.warning(f"Ошибка при авторизации: {e}")
+            logger.info("⏳ Если автоматический вход не удался, войдите вручную за 20 секунд...")
+            time.sleep(20)
+
+        # Переходим по ссылке на отчёт
+        logger.info(f"Переходим по ссылке: {download_link}")
+        driver.get(download_link)
+        time.sleep(5)
+        
+        # Парсим данные со страницы
+        employees = parse_report_from_page(driver)
+        
+        if employees:
+            date_str = get_yesterday_date()[0]
+            message = format_report_for_telegram(employees, date_str)
+            return {"message": message, "employees": employees, "count": len(employees)}
+        else:
+            logger.error("❌ Не удалось найти данные сотрудников на странице")
+            driver.save_screenshot(os.path.join(DOWNLOAD_DIR, "page_screenshot.png"))
+            logger.info("Сохранен скриншот страницы для анализа")
+            return None
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка в процессе: {e}")
+        try:
             if driver:
-                driver.quit()
-                driver = None
-            if attempt < max_retries - 1:
-                logger.info("Повторная попытка через 10 секунд...")
-                time.sleep(10)
-            else:
-                logger.error("Все попытки исчерпаны.")
-                raise
-        finally:
-            if driver:
-                driver.quit()
-                logger.info("Браузер закрыт")
-    return None
+                driver.save_screenshot(os.path.join(DOWNLOAD_DIR, "error_screenshot.png"))
+                logger.info("Сохранен скриншот ошибки")
+        except:
+            pass
+        return None
+    finally:
+        if driver:
+            driver.quit()
+            logger.info("Браузер закрыт")
+
+# ===================================================
+#  ОТПРАВКА В TELEGRAM
+# ===================================================
 
 def send_text_to_telegram(text):
     if not SEND_TO_TELEGRAM:
@@ -528,6 +522,10 @@ def send_text_to_telegram(text):
     except Exception as e:
         logger.error(f"Ошибка отправки: {e}")
         return False
+
+# ===================================================
+#  ОСНОВНАЯ ФУНКЦИЯ
+# ===================================================
 
 def run_parser():
     logger.info("=" * 60)
