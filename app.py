@@ -10,8 +10,8 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.firefox.service import Service
-from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.keys import Keys
 import logging
 import urllib3
@@ -116,68 +116,53 @@ def check_target(avg_check):
 def get_motivational_phrase():
     return random.choice(MOTIVATIONAL_PHRASES)
 
-def get_firefox_driver():
+def get_chrome_driver():
     options = Options()
-    options.add_argument("--headless")
+    
+    options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-gpu")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-blink-features=AutomationControlled")
     
-    # Настройки для Firefox
-    options.set_preference("browser.download.folderList", 2)
-    options.set_preference("browser.download.manager.showWhenStarting", False)
-    options.set_preference("browser.download.dir", DOWNLOAD_DIR)
-    options.set_preference("browser.helperApps.neverAsk.saveToDisk", "application/pdf,text/plain,text/csv")
-    options.set_preference("pdfjs.disabled", True)
-    options.set_preference("browser.download.useDownloadDir", True)
+    prefs = {
+        "download.default_directory": DOWNLOAD_DIR,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "plugins.always_open_pdf_externally": True,
+        "safebrowsing.enabled": True
+    }
+    options.add_experimental_option("prefs", prefs)
     
-    # Важные настройки для стабильности
-    options.set_preference("browser.sessionhistory.max_entries", 50)
-    options.set_preference("browser.sessionstore.max_tabs_undo", 0)
-    options.set_preference("browser.sessionstore.max_windows_undo", 0)
-    options.set_preference("browser.sessionstore.interval", 60000)
-    options.set_preference("browser.sessionstore.resume_from_crash", False)
-    options.set_preference("browser.sessionstore.restore_on_demand", True)
-    options.set_preference("browser.sessionstore.restore_tabs_lazily", True)
-    
-    options.set_preference("dom.ipc.processCount", 1)
-    options.set_preference("dom.ipc.keepProcessesAlive.webIsolated", False)
-    options.set_preference("dom.ipc.keepProcessesAlive.extension", False)
-    
-    # Путь к GeckoDriver
     driver_paths = [
-        "/usr/local/bin/geckodriver",
-        "/usr/bin/geckodriver"
+        "/usr/local/bin/chromedriver",
+        "/usr/bin/chromedriver"
     ]
     
     driver_path = None
     for path in driver_paths:
         if os.path.exists(path):
             driver_path = path
-            logger.info(f"✅ Найден GeckoDriver: {path}")
+            logger.info(f"✅ Найден ChromeDriver: {path}")
             break
     
     if not driver_path:
         try:
-            result = subprocess.run(["which", "geckodriver"], capture_output=True, text=True)
+            result = subprocess.run(["which", "chromedriver"], capture_output=True, text=True)
             if result.returncode == 0 and result.stdout.strip():
                 driver_path = result.stdout.strip()
-                logger.info(f"✅ GeckoDriver найден через which: {driver_path}")
+                logger.info(f"✅ ChromeDriver найден через which: {driver_path}")
         except:
             pass
     
     if not driver_path:
-        raise Exception("GeckoDriver не найден в системе")
+        raise Exception("ChromeDriver не найден в системе")
     
-    service = Service(
-        driver_path,
-        service_args=["--log", "error"],
-        log_output=subprocess.DEVNULL
-    )
+    service = Service(driver_path)
     
     try:
-        driver = webdriver.Firefox(service=service, options=options)
+        driver = webdriver.Chrome(service=service, options=options)
         driver.set_page_load_timeout(60)
         driver.implicitly_wait(10)
         return driver
@@ -186,7 +171,7 @@ def get_firefox_driver():
         raise
 
 # ===================================================
-#  ПОЧТА И ПАРСИНГ
+#  ПОЧТА
 # ===================================================
 
 def get_sbis_download_link():
@@ -264,6 +249,10 @@ def get_sbis_download_link():
                 pass
         return None
 
+# ===================================================
+#  ПАРСИНГ
+# ===================================================
+
 def parse_report_from_page(driver):
     logger.info("🔍 Парсим данные...")
     employees = []
@@ -333,6 +322,10 @@ def parse_report_from_page(driver):
     except Exception as e:
         logger.error(f"Ошибка при парсинге: {e}")
         return []
+
+# ===================================================
+#  ФОРМАТИРОВАНИЕ ОТЧЕТА
+# ===================================================
 
 def format_report_for_telegram(employees, date_str):
     if not employees:
@@ -432,7 +425,7 @@ def download_report_from_link(download_link):
     
     driver = None
     try:
-        driver = get_firefox_driver()
+        driver = get_chrome_driver()
         driver.get("https://online.sbis.ru/")
         time.sleep(3)
         
