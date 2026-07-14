@@ -13,7 +13,6 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.keys import Keys
-from webdriver_manager.chrome import ChromeDriverManager
 import logging
 import urllib3
 from dotenv import load_dotenv
@@ -363,7 +362,8 @@ def download_report_from_link(download_link):
 
     driver = None
     try:
-        service = Service(ChromeDriverManager().install())
+        # Используем прямой путь к ChromeDriver (установлен в Docker)
+        service = Service("/usr/bin/chromedriver")
         driver = webdriver.Chrome(service=service, options=options)
         driver.implicitly_wait(15)
 
