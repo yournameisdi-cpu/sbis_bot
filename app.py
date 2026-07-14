@@ -26,7 +26,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 load_dotenv()
 
 # ===================================================
-#  НАСТРОЙКИ
+#  НАСТРОЙКИ (С ПУТЯМИ В /tmp)
 # ===================================================
 
 SBIS_LOGIN = os.getenv('SBIS_LOGIN')
@@ -42,8 +42,8 @@ MAIL_CONFIG = {
 }
 
 STORE_NAME = os.getenv('STORE_NAME', "Zibo Food")
-DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
-LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+DOWNLOAD_DIR = "/tmp/downloads"
+LOG_DIR = "/tmp/logs"
 TARGET_MIN = int(os.getenv('TARGET_MIN', 580))
 TARGET_MAX = int(os.getenv('TARGET_MAX', 620))
 
@@ -77,9 +77,22 @@ logger = logging.getLogger(__name__)
 # ===================================================
 
 def setup_download_dir():
+    """Создает папки для загрузок и логов"""
     for directory in [DOWNLOAD_DIR, LOG_DIR]:
         if not os.path.exists(directory):
-            os.makedirs(directory)
+            try:
+                os.makedirs(directory, exist_ok=True)
+                os.chmod(directory, 0o777)
+                logger.info(f"✅ Создана папка: {directory}")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось создать папку {directory}: {e}")
+                # Если не можем создать, используем /tmp
+                if directory == DOWNLOAD_DIR:
+                    DOWNLOAD_DIR = "/tmp/downloads"
+                elif directory == LOG_DIR:
+                    LOG_DIR = "/tmp/logs"
+                os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+                os.makedirs(LOG_DIR, exist_ok=True)
 
 def get_date_strings():
     yesterday = datetime.now() - timedelta(days=1)
@@ -171,7 +184,7 @@ def get_chrome_driver():
         raise
 
 # ===================================================
-#  ПОЧТА
+#  ПОЧТА И ПАРСИНГ
 # ===================================================
 
 def get_sbis_download_link():
@@ -249,10 +262,6 @@ def get_sbis_download_link():
                 pass
         return None
 
-# ===================================================
-#  ПАРСИНГ
-# ===================================================
-
 def parse_report_from_page(driver):
     logger.info("🔍 Парсим данные...")
     employees = []
@@ -322,10 +331,6 @@ def parse_report_from_page(driver):
     except Exception as e:
         logger.error(f"Ошибка при парсинге: {e}")
         return []
-
-# ===================================================
-#  ФОРМАТИРОВАНИЕ ОТЧЕТА
-# ===================================================
 
 def format_report_for_telegram(employees, date_str):
     if not employees:
