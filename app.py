@@ -10,8 +10,8 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.firefox.service import Service
+from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.common.keys import Keys
 import logging
 import urllib3
@@ -42,8 +42,6 @@ MAIL_CONFIG = {
 }
 
 STORE_NAME = os.getenv('STORE_NAME', "Zibo Food")
-
-# Используем /tmp для загрузок и логов
 DOWNLOAD_DIR = "/tmp/downloads"
 LOG_DIR = "/tmp/logs"
 
@@ -64,10 +62,6 @@ MOTIVATIONAL_PHRASES = [
 ]
 
 app = Flask(__name__)
-
-# ===================================================
-#  ЛОГГИРОВАНИЕ
-# ===================================================
 
 logging.basicConfig(
     level=logging.INFO,
@@ -124,11 +118,10 @@ def get_motivational_phrase():
     return random.choice(MOTIVATIONAL_PHRASES)
 
 # ===================================================
-#  ПОЧТА (ВАША РАБОЧАЯ ФУНКЦИЯ)
+#  ПОЧТА
 # ===================================================
 
 def get_sbis_download_link():
-    """Находит письмо с отчётом и извлекает ссылку."""
     try:
         logger.info("Подключаемся к почте...")
         mail = imaplib.IMAP4_SSL(MAIL_CONFIG['imap_server'])
@@ -208,16 +201,15 @@ def get_sbis_download_link():
         return None
 
 # ===================================================
-#  ПАРСИНГ ДАННЫХ
+#  ПАРСИНГ
 # ===================================================
 
 def parse_report_from_page(driver):
-    """Парсит данные по сотрудникам со страницы отчёта."""
     logger.info("🔍 Парсим данные со страницы...")
     employees = []
     
     try:
-        WebDriverWait(driver, 20).until(
+        WebDriverWait(driver, 30).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         time.sleep(5)
@@ -337,49 +329,57 @@ def format_report_for_telegram(employees, date_str):
     return "\n".join(lines)
 
 # ===================================================
-#  ОСНОВНАЯ ФУНКЦИЯ С ВХОДОМ (ВАШ РАБОЧИЙ КОД)
+#  FIREFOX ДРАЙВЕР
+# ===================================================
+
+def get_firefox_driver():
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--window-size=1920,1080")
+    
+    # Настройки для Firefox
+    options.set_preference("browser.download.folderList", 2)
+    options.set_preference("browser.download.manager.showWhenStarting", False)
+    options.set_preference("browser.download.dir", DOWNLOAD_DIR)
+    options.set_preference("browser.helperApps.neverAsk.saveToDisk", "application/pdf,text/plain,text/csv")
+    options.set_preference("pdfjs.disabled", True)
+    options.set_preference("browser.download.useDownloadDir", True)
+    
+    service = Service("/usr/local/bin/geckodriver")
+    
+    try:
+        driver = webdriver.Firefox(service=service, options=options)
+        driver.set_page_load_timeout(60)
+        driver.implicitly_wait(15)
+        return driver
+    except Exception as e:
+        logger.error(f"Ошибка создания драйвера: {e}")
+        raise
+
+# ===================================================
+#  ОСНОВНАЯ ФУНКЦИЯ (Firefox)
 # ===================================================
 
 def download_report_from_link(download_link):
-    """Открывает страницу с отчётом и парсит данные."""
     logger.info("🚀 Открываем страницу с отчётом...")
-
-    options = webdriver.ChromeOptions()
-    prefs = {
-        "download.default_directory": DOWNLOAD_DIR,
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "plugins.always_open_pdf_externally": True,
-        "safebrowsing.enabled": True
-    }
-    options.add_experimental_option("prefs", prefs)
-    options.add_argument("--disable-notifications")
-    options.add_argument("--ignore-ssl-errors=yes")
-    options.add_argument("--ignore-certificate-errors")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--headless=new")
 
     driver = None
     try:
-        # Используем прямой путь к ChromeDriver (установлен в Docker)
-        service = Service("/usr/bin/chromedriver")
-        driver = webdriver.Chrome(service=service, options=options)
-        driver.implicitly_wait(15)
+        driver = get_firefox_driver()
 
         logger.info("Открываем сайт СБИС...")
         driver.get("https://online.sbis.ru/")
-        time.sleep(3)
+        time.sleep(10)
 
         # ---------- ДВУХЭТАПНАЯ АВТОРИЗАЦИЯ ----------
         try:
             if "login" in driver.current_url or "auth" in driver.current_url:
                 logger.info("Выполняем вход...")
                 
-                # ШАГ 1: Вводим логин и нажимаем Enter
                 login_input = None
                 try:
-                    login_input = WebDriverWait(driver, 10).until(
+                    login_input = WebDriverWait(driver, 15).until(
                         EC.presence_of_element_located((By.ID, "login"))
                     )
                 except:
@@ -398,17 +398,15 @@ def download_report_from_link(download_link):
                     login_input.clear()
                     login_input.send_keys(SBIS_LOGIN)
                     logger.info("✅ Введен логин")
-                    time.sleep(1)
+                    time.sleep(2)
                     
-                    # Нажимаем Enter, чтобы появилось поле пароля
                     login_input.send_keys(Keys.RETURN)
                     logger.info("🔄 Нажат Enter для отображения поля пароля")
-                    time.sleep(3)
+                    time.sleep(5)
                     
-                    # ШАГ 2: Вводим пароль
                     password_input = None
                     try:
-                        password_input = WebDriverWait(driver, 10).until(
+                        password_input = WebDriverWait(driver, 15).until(
                             EC.presence_of_element_located((By.ID, "password"))
                         )
                     except:
@@ -424,9 +422,8 @@ def download_report_from_link(download_link):
                         password_input.clear()
                         password_input.send_keys(SBIS_PASSWORD)
                         logger.info("✅ Введен пароль")
-                        time.sleep(1)
+                        time.sleep(2)
                         
-                        # ШАГ 3: Нажимаем Enter или кнопку "Войти"
                         try:
                             submit_button = None
                             try:
@@ -447,11 +444,11 @@ def download_report_from_link(download_link):
                                 password_input.send_keys(Keys.RETURN)
                                 logger.info("🔄 Нажат Enter для входа")
                             
-                            time.sleep(5)
+                            time.sleep(10)
                         except Exception as e:
                             logger.warning(f"Ошибка при нажатии кнопки входа: {e}")
                             password_input.send_keys(Keys.RETURN)
-                            time.sleep(5)
+                            time.sleep(10)
                     else:
                         logger.warning("Поле пароля не появилось, возможно, вход уже выполнен")
                 else:
@@ -461,15 +458,13 @@ def download_report_from_link(download_link):
                 
         except Exception as e:
             logger.warning(f"Ошибка при авторизации: {e}")
-            logger.info("⏳ Если автоматический вход не удался, войдите вручную за 20 секунд...")
-            time.sleep(20)
+            logger.info("⏳ Если автоматический вход не удался, войдите вручную за 30 секунд...")
+            time.sleep(30)
 
-        # Переходим по ссылке на отчёт
         logger.info(f"Переходим по ссылке: {download_link}")
         driver.get(download_link)
-        time.sleep(5)
+        time.sleep(10)
         
-        # Парсим данные со страницы
         employees = parse_report_from_page(driver)
         
         if employees:
@@ -479,7 +474,6 @@ def download_report_from_link(download_link):
         else:
             logger.error("❌ Не удалось найти данные сотрудников на странице")
             driver.save_screenshot(os.path.join(DOWNLOAD_DIR, "page_screenshot.png"))
-            logger.info("Сохранен скриншот страницы для анализа")
             return None
 
     except Exception as e:
@@ -487,7 +481,6 @@ def download_report_from_link(download_link):
         try:
             if driver:
                 driver.save_screenshot(os.path.join(DOWNLOAD_DIR, "error_screenshot.png"))
-                logger.info("Сохранен скриншот ошибки")
         except:
             pass
         return None
@@ -522,10 +515,6 @@ def send_text_to_telegram(text):
     except Exception as e:
         logger.error(f"Ошибка отправки: {e}")
         return False
-
-# ===================================================
-#  ОСНОВНАЯ ФУНКЦИЯ
-# ===================================================
 
 def run_parser():
     logger.info("=" * 60)
@@ -584,10 +573,6 @@ def run():
 @app.route('/health')
 def health():
     return jsonify({'status': 'healthy'})
-
-# ===================================================
-#  ЗАПУСК
-# ===================================================
 
 if __name__ == "__main__":
     run_parser()
